@@ -1,0 +1,639 @@
+---
+title: "Helios_snRNAseq"
+output: html_document
+---
+
+```{r}
+setwd("C:/AMA/Helios")
+
+library(dplyr)
+library(Seurat)
+library(patchwork)
+library(SingleCellExperiment)
+library(SingleR)
+library(cowplot)
+library(ggplot2)
+library(ggcyto)
+library(gridExtra)
+library(iDEA)
+library(viridis)
+library(readr)
+```
+
+```{r}
+all_samples <- read.csv("Combined_Lib-P1sc_DBEC_MolsPerCell.csv", skip = 8, row.names = 1)
+all_samples_tags <- read.csv("Lib-P1sc_Sample_Tag_Calls.csv", skip = 8, row.names = 1)
+s_obj <- CreateSeuratObject(counts = t(all_samples), project = "Helios")
+s_obj$sample_tag <- all_samples_tags$Sample_Tag
+s_obj$sample_name <- all_samples_tags$Sample_Name
+#s_obj <- s_obj[,s_obj$sample_tag %in% c("Multiplet","Undetermined")]
+treg_unstim <- s_obj[,s_obj$sample_tag %in% c("SampleTag01_hs", "SampleTag03_hs", "SampleTag05_hs")]
+treg_unstim$sampletype <- "treg_unstim"
+treg_stim <- s_obj[,s_obj$sample_tag %in% c("SampleTag02_hs", "SampleTag04_hs", "SampleTag06_hs")]
+treg_stim$sampletype <- "treg_stim"
+tconv_unstim <- s_obj[,s_obj$sample_tag %in% c("SampleTag07_hs", "SampleTag09_hs", "SampleTag11_hs")]
+tconv_unstim$sampletype <- "tconv_unstim"
+tconv_stim <- s_obj[,s_obj$sample_tag %in% c("SampleTag08_hs", "SampleTag10_hs", "SampleTag12_hs")]
+tconv_stim$sampletype <- "tconv_stim"
+
+comb <- merge(tconv_unstim, tconv_stim, add.cell.ids = c("tc_unstim", "tc_stim"))
+data <- SplitObject(comb, split.by = "sampletype")
+data <- lapply(X = data, FUN = function(x) {
+    x <- FindVariableFeatures(x)
+    x <- ScaleData(x)
+    x <- RunPCA(x)
+    x <- RunUMAP(x, dims = 1:15)
+    x <- RunTSNE(x)
+    x <- FindNeighbors(x)
+    x <- FindClusters(x)
+})
+
+comb_treg <- merge(treg_unstim, treg_stim, add.cell.ids = c("treg_unstim", "treg_stim"))
+data_treg <- SplitObject(comb_treg, split.by = "sampletype")
+data_treg <- lapply(X = data_treg, FUN = function(x) {
+    x <- FindVariableFeatures(x)
+    x <- ScaleData(x)
+    x <- RunPCA(x)
+    x <- RunUMAP(x, dims = 1:15)
+    x <- RunTSNE(x)
+    x <- FindNeighbors(x)
+    x <- FindClusters(x)
+})    
+
+
+tconv_unstim.sc <- as.SingleCellExperiment(tconv_unstim, assay = "RNA")
+tconv_stim.sc <- as.SingleCellExperiment(tconv_stim, assay = "RNA")
+
+treg_unstim.sc <- as.SingleCellExperiment(treg_unstim, assay = "RNA")
+treg_stim.sc <- as.SingleCellExperiment(treg_stim, assay = "RNA")
+
+im.ref <- celldex::DatabaseImmuneCellExpressionData()
+nh.ref <- celldex::NovershternHematopoieticData()
+#mon.ref <- celldex::MonacoImmuneData()
+
+ct.pred <- lapply(list(tconv_unstim.sc, tconv_stim.sc), function(sc){
+  pred.im <- SingleR(test = sc, ref = im.ref, labels = im.ref$label.main)
+  pred.im.f <- SingleR(test = sc, ref = im.ref, labels = im.ref$label.fine)
+  if (identical(rownames(pred.im), colnames(sc))) {
+    sc$im <- pred.im$labels
+    sc$im.fine <- pred.im.f$labels
+  }
+  return(sc)
+})
+
+ct <- data.frame(cbind(im = ct.pred[[1]]$im,
+                       im.fine = ct.pred[[1]]$im.fine)) 
+rownames(ct) <- colnames(data$tconv_unstim)
+data$tconv_unstim <- AddMetaData(data$tconv_unstim, ct)
+ct <- data.frame(cbind(im = ct.pred[[2]]$im,
+                       im.fine = ct.pred[[2]]$im.fine)) 
+rownames(ct) <- colnames(data$tconv_stim)
+data$tconv_stim <- AddMetaData(data$tconv_stim, ct)
+
+ct.pred <- lapply(list(tconv_unstim.sc, tconv_stim.sc), function(sc){
+  pred.nh <- SingleR(test = sc, ref = nh.ref, labels = nh.ref$label.main)
+  pred.nh.f <- SingleR(test = sc, ref = nh.ref, labels = nh.ref$label.fine)
+  if (identical(rownames(pred.nh), colnames(sc))) {
+    sc$nh <- pred.nh$labels
+    sc$nh.fine <- pred.nh.f$labels
+  }
+  return(sc)
+})
+
+ct <- data.frame(cbind(nh = ct.pred[[1]]$nh,
+                       nh.fine = ct.pred[[1]]$nh.fine)) 
+rownames(ct) <- colnames(data$tconv_unstim)
+data$tconv_unstim <- AddMetaData(data$tconv_unstim, ct)
+ct <- data.frame(cbind(nh = ct.pred[[2]]$nh,
+                       nh.fine = ct.pred[[2]]$nh.fine)) 
+rownames(ct) <- colnames(data$tconv_stim)
+data$tconv_stim <- AddMetaData(data$tconv_stim, ct)
+
+
+ct.pred <- lapply(list(treg_unstim.sc, treg_stim.sc), function(sc){
+  pred.im <- SingleR(test = sc, ref = im.ref, labels = im.ref$label.main)
+  pred.im.f <- SingleR(test = sc, ref = im.ref, labels = im.ref$label.fine)
+  if (identical(rownames(pred.im), colnames(sc))) {
+    sc$im <- pred.im$labels
+    sc$im.fine <- pred.im.f$labels
+  }
+  return(sc)
+})
+
+ct <- data.frame(cbind(im = ct.pred[[1]]$im,
+                       im.fine = ct.pred[[1]]$im.fine)) 
+rownames(ct) <- colnames(data_treg$treg_unstim)
+data_treg$treg_unstim <- AddMetaData(data_treg$treg_unstim, ct)
+ct <- data.frame(cbind(im = ct.pred[[2]]$im,
+                       im.fine = ct.pred[[2]]$im.fine)) 
+rownames(ct) <- colnames(data_treg$treg_stim)
+data_treg$treg_stim <- AddMetaData(data_treg$treg_stim, ct)
+
+ct.pred <- lapply(list(treg_unstim.sc, treg_stim.sc), function(sc){
+  pred.nh <- SingleR(test = sc, ref = nh.ref, labels = nh.ref$label.main)
+  pred.nh.f <- SingleR(test = sc, ref = nh.ref, labels = nh.ref$label.fine)
+  if (identical(rownames(pred.nh), colnames(sc))) {
+    sc$nh <- pred.nh$labels
+    sc$nh.fine <- pred.nh.f$labels
+  }
+  return(sc)
+})
+
+ct <- data.frame(cbind(nh = ct.pred[[1]]$nh,
+                       nh.fine = ct.pred[[1]]$nh.fine)) 
+rownames(ct) <- colnames(data_treg$treg_unstim)
+data_treg$treg_unstim <- AddMetaData(data_treg$treg_unstim, ct)
+ct <- data.frame(cbind(nh = ct.pred[[2]]$nh,
+                       nh.fine = ct.pred[[2]]$nh.fine)) 
+rownames(ct) <- colnames(data_treg$treg_stim)
+data_treg$treg_stim <- AddMetaData(data_treg$treg_stim, ct)
+
+
+data_treg$treg_unstim$im.fine[data_treg$treg_unstim$im.fine %in% c("T cells, CD8+, naive, stimulated", "NK cells", "T cells, CD8+, naive")] <- "Undefined"
+
+data_treg$treg_unstim$patient_or_not <- data_treg$treg_unstim$sample_name # define patient vs others
+data_treg$treg_unstim$patient_or_not[data_treg$treg_unstim$patient_or_not != "P1Tregunstim"] <- "HC"
+
+data_treg$treg_stim$patient_or_not <- data_treg$treg_stim$sample_name # define patient vs others
+data_treg$treg_stim$patient_or_not[data_treg$treg_stim$patient_or_not != "P1Tregstim"] <- "HC"
+
+####
+data_treg$treg_unstim$subset <- "subsets"
+
+data_treg$treg_unstim$subset[which(data_treg$treg_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & data_treg$treg_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] > 30)] <- "CD45RA- HLADR+"
+
+data_treg$treg_unstim$subset[which(data_treg$treg_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & data_treg$treg_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] < 30)] <- "CD45RA+ HLADR-"
+
+data_treg$treg_unstim$subset[which(data_treg$treg_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] <= 30 & data_treg$treg_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] <= 30)] <- "CD45RA- HLADR-"
+
+data_treg$treg_unstim$subset[which(data_treg$treg_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] >= 30 & data_treg$treg_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] >= 30)] <- "CD45RA+ HLADR+"
+####
+
+data_treg$treg_stim$subset <- "subsets"
+
+data_treg$treg_stim$subset[which(data_treg$treg_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & data_treg$treg_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] > 30)] <- "CD45RA- HLADR+"
+
+data_treg$treg_stim$subset[which(data_treg$treg_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & data_treg$treg_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] < 30)] <- "CD45RA+ HLADR-"
+
+data_treg$treg_stim$subset[which(data_treg$treg_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] <= 30 & data_treg$treg_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] <= 30)] <- "CD45RA- HLADR-"
+
+data_treg$treg_stim$subset[which(data_treg$treg_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] >= 30 & data_treg$treg_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] >= 30)] <- "CD45RA+ HLADR+"
+
+data_treg$treg_stim$subset_2 <- data_treg$treg_stim$subset
+data_treg$treg_stim$subset_2 <- factor(data_treg$treg_stim$subset_2, levels = c("CD45RA+ HLADR-", "CD45RA- HLADR+"))
+
+geneset <- read_csv("Genesets.csv")
+NCI_IL23 <- geneset$NCI_IL23
+NCI_IL23 <- list(NCI_IL23)
+
+data_treg$treg_stim <- AddModuleScore(object = data_treg$treg_stim, features = NCI_IL23, nbin = 8, name = 'NCI_IL23', search = FALSE)
+
+for_export <- cbind(data_treg[["treg_stim"]]@meta.data[["subsets"]], data_treg[["treg_stim"]]@meta.data[["im.fine"]], data_treg[["treg_stim"]]@meta.data[["patient_or_not"]], data_treg[["treg_stim"]]@meta.data[["BP_TCR_apoptosis1"]], data_treg[["treg_stim"]]@meta.data[["BP_TSLP1"]], data_treg[["treg_stim"]]@meta.data[["BP_Glyc1"]], data_treg[["treg_stim"]]@meta.data[["K_Th1_Th21"]], data_treg[["treg_stim"]]@meta.data[["K_Th171"]], data_treg[["treg_stim"]]@meta.data[["H_Myc_V11"]], data_treg[["treg_stim"]]@meta.data[["H_Myc_V21"]], data_treg[["treg_stim"]]@meta.data[["H_allograft_rejection1"]], data_treg[["treg_stim"]]@meta.data[["H_mTORC11"]], data_treg[["treg_stim"]]@meta.data[["H_IL21"]], data_treg[["treg_stim"]]@meta.data[["H_TNF_NFKB1"]], data_treg[["treg_stim"]]@meta.data[["NCI_IL121"]], data_treg[["treg_stim"]]@meta.data[["NCI_IL271"]], data_treg[["treg_stim"]]@meta.data[["NCI_IL231"]])
+
+columnnames <- c("subset", "im.fine_label", "patient_or_not", "BP_TCR_apoptosis", "BP_TSLP", "BP_Glyc", "K_Th1_Th2", "K_Th17", "H_Myc_V1", "H_Myc_V2", "H_allograft_rejection", "H_mTORC1", "H_IL2", "H_TNF_NFKB", "NCI_IL12", "NCI_IL27", "NCI_IL23")
+
+for_export <- as.data.frame(for_export)
+colnames(for_export) <- columnnames 
+
+write.csv(for_export, "modulescore_treg_stim.csv")
+
+
+#Plot based on CD45RA and PD-1 Expression
+DimPlot(data_treg$treg_unstim, group.by = "subset", cols= c("snow4", "red", "blue", "purple3"), label = F, repel = T, label.size = 8)
+
+# naive <- RNA_counts["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & RNA_counts["CD279.EH12.1.PDCD1.AHS0014.pAbO", ] < 15
+# x <- colnames(RNA_counts)[naive]
+# naive <- data_treg$treg_unstim[, x]
+# 
+# dn <- RNA_counts["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & RNA_counts["CD279.EH12.1.PDCD1.AHS0014.pAbO", ] < 15
+# x <- colnames(RNA_counts)[dn]
+# dn <- data_treg$treg_unstim[, x]
+# 
+# dp <- RNA_counts["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & RNA_counts["CD279.EH12.1.PDCD1.AHS0014.pAbO", ] > 15
+# x <- colnames(RNA_counts)[dp]
+# dp <- data_treg$treg_unstim[, x]
+
+#### Plotting stuff
+DimPlot(data_treg$treg_unstim, group.by = "patient_or_not", cols = c("blue", "red"), label = F, repel = T, label.size = 4, pt.size = 1)
+
+DimPlot(data_treg$treg_unstim, group.by = "im.fine", cols = c("#79B9FC", "#A5B3CE", "#5A8C89", "#DC9FDF", "#F8EBC9", "#9B98F9", "#FCC5BE", "#FFD110", "#F75641", "#A87858"), label = F, repel = T, label.size = 4, pt.size = 1)
+
+###Plot AbSeq Labels
+DimPlot(data_treg$treg_unstim, group.by = "subset", cols = c("grey80", "cornflowerblue", "lightpink1", "lightgoldenrod"), label = F, repel = T, label.size = 4, pt.size = 1)
+
+DimPlot(data_treg$treg_unstim, group.by = "subset", cols = c("#D4D5D8", "#86A3CE", "#FCC5BE", "#F7DFA9"), label = F, repel = T, label.size = 4, pt.size = 1)
+
+DimPlot(data_treg$treg_unstim, group.by = "subset", label = F, repel = T, label.size = 4)
+FeaturePlot(data_treg$treg_unstim, features = "HLA.DR.CD74.AHS0035.pAbO")
+p <- VlnPlot(data_treg$treg_stim, features = "NFKB1", group.by = "subset_2", split.by = "patient_or_not")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_continuous(trans = 'log10'))
+p
+
+p <- VlnPlot(data_treg$treg_stim, features = "CYLD", group.by = "subset_2", split.by = "patient_or_not")
+p <- lapply(1:1, function(x) p <- p[[x]])
+p
+
+p
+DimPlot(data_treg$tconv_unstim, group.by = "sample_name", label = F, repel = T, label.size = 4)
+######
+
+### violin plot plotting from Maggie
+
+p1 <- VlnPlot(data_treg$treg_stim[, data_treg$treg_stim$subset_2 == "CD45RA+ HLADR-"], features = "CYLD", group.by = "patient_or_not") + geom_boxplot(width = 0.1, fill = "white") + ylim(0, 8) + ggtitle("CD45RA+ HLADR-") + theme(legend.position = "none")
+p2 <- VlnPlot(data_treg$treg_stim[, data_treg$treg_stim$subset_2 == "CD45RA- HLADR+"], features = "CYLD", group.by = "patient_or_not") + geom_boxplot(width = 0.1, fill = "white") + ylim(0, 8) + ggtitle("CD45RA- HLADR+") + theme(legend.position = "none")
+plot_grid(p1, p2)
+
+#violin plots to decide Ab-seq cutoffs
+p <- VlnPlot(data_treg$treg_stim, features = "CD279.EH12.1.PDCD1.AHS0014.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=15))
+p
+
+p <- VlnPlot(data_treg$treg_stim, features = "CD45RA.HI100.PTPRC.AHS0009.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=30))
+p
+
+p <- VlnPlot(data_treg$treg_stim, features = "HLA.DR.CD74.AHS0035.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=30))
+p
+
+#Plot violin plots based on HLA-DR in the naive/activated subsets
+p <- VlnPlot(data_treg$treg_unstim, features = "HLA.DR.CD74.AHS0035.pAbO", group.by = "subset")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0))
+p
+
+
+#compare activated patient Tregs, stim vs unstim (45RA- and HLA-DR+)
+test1 <- comb_treg@assays$RNA@counts
+select <- test1["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test1["HLA.DR.CD74.AHS0035.pAbO", ] > 30
+x <- colnames(test1)[select]
+test1 <- comb_treg[, x]
+test1$patient <- test1$sample_name # define patient vs others
+test1$patient[test1$patient %in% "P1Tregstim"] <- "P1Tregstim"
+test1$patient[test1$patient %in% "P1Tregunstim"] <- "P1Tregunstim"
+Idents(test1) <- "patient"
+DE.markers <- FindMarkers(test1, ident.1 = "P1Tregstim", ident.2 = "P1Tregunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/activated_HLADR+_Treg_patient_stimvsunstim.csv"))
+
+#compare naive patient Tregs, stim vs unstim (45RA+ and HLA-DR-)
+test2 <- comb_treg@assays$RNA@counts
+select <- test2["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test2["HLA.DR.CD74.AHS0035.pAbO", ] < 30
+x <- colnames(test2)[select]
+test2 <- comb_treg[, x]
+test2$patient <- test2$sample_name # define patient vs others
+test2$patient[test2$patient %in% "P1Tregstim"] <- "P1Tregstim"
+test2$patient[test2$patient %in% "P1Tregunstim"] <- "P1Tregunstim"
+Idents(test2) <- "patient"
+DE.markers <- FindMarkers(test2, ident.1 = "P1Tregstim", ident.2 = "P1Tregunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/naive_HLADR-_Treg_patient_stimvsunstim.csv"))
+
+#compare stimulated activated Tregs, patient vs HC stim (45RA- and HLA-DR+)
+test3 <- comb_treg@assays$RNA@counts
+select <- test3["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test3["HLA.DR.CD74.AHS0035.pAbO", ] > 30
+x <- colnames(test3)[select]
+test3 <- comb_treg[, x]
+test3$patient <- test3$sample_name # define patient vs others
+test3$patient[test3$patient %in% c("HC1Tregstim", "HC2Tregstim")] <- "HCTregstim"
+test3$patient[test3$patient %in% "P1Tregstim"] <- "P1Tregstim"
+Idents(test3) <- "patient"
+DE.markers <- FindMarkers(test3, ident.1 = "P1Tregstim", ident.2 = "HCTregstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/stim_activated_HLADR+_Treg_patientvsHC.csv"))
+
+#compare stimulated naive Tregs, patient vs HC stim (45RA+ and HLA-DR-)
+test4 <- comb_treg@assays$RNA@counts
+select <- test4["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test4["HLA.DR.CD74.AHS0035.pAbO", ] < 30
+x <- colnames(test4)[select]
+test4 <- comb_treg[, x]
+test4$patient <- test4$sample_name # define patient vs others
+test4$patient[test4$patient %in% c("HC1Tregstim", "HC2Tregstim")] <- "HCTregstim"
+test4$patient[test4$patient %in% "P1Tregstim"] <- "P1Tregstim"
+Idents(test4) <- "patient"
+DE.markers <- FindMarkers(test4, ident.1 = "P1Tregstim", ident.2 = "HCTregstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/stim_naive_HLADR-_Treg_patientvsHC.csv"))
+
+#compare unstimulated activated Tregs, patient vs HC unstim (45RA- and HLA-DR+)
+test5 <- comb_treg@assays$RNA@counts
+select <- test5["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test5["HLA.DR.CD74.AHS0035.pAbO", ] > 30
+x <- colnames(test5)[select]
+test5 <- comb_treg[, x]
+test5$patient <- test5$sample_name # define patient vs others
+test5$patient[test5$patient %in% c("HC1Tregunstim", "HC2Tregunstim")] <- "HCTregunstim"
+test5$patient[test5$patient %in% "P1Tregunstim"] <- "P1Tregunstim"
+Idents(test5) <- "patient"
+DE.markers <- FindMarkers(test5, ident.1 = "P1Tregunstim", ident.2 = "HCTregunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/unstim_activated_HLADR+_Treg_patientvsHC.csv"))
+
+#compare unstimulated naive Tregs, patient vs HC unstim (45RA+ and HLA-DR-)
+test6 <- comb_treg@assays$RNA@counts
+select <- test6["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test6["HLA.DR.CD74.AHS0035.pAbO", ] < 30
+x <- colnames(test6)[select]
+test6 <- comb_treg[, x]
+test6$patient <- test6$sample_name # define patient vs others
+test6$patient[test6$patient %in% c("HC1Tregunstim", "HC2Tregunstim")] <- "HCTregunstim"
+test6$patient[test6$patient %in% "P1Tregunstim"] <- "P1Tregunstim"
+Idents(test6) <- "patient"
+DE.markers <- FindMarkers(test6, ident.1 = "P1Tregunstim", ident.2 = "HCTregunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/unstim_naive_HLADR-_Treg_patientvsHC.csv"))
+
+
+#compare naive Tregs, HC stim vs unstim (45RA+ and HLA-DR-)
+test7 <- comb_treg@assays$RNA@counts
+select <- test7["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test7["HLA.DR.CD74.AHS0035.pAbO", ] < 30
+x <- colnames(test7)[select]
+test7 <- comb_treg[, x]
+test7$patient <- test7$sample_name # define patient vs others
+test7$patient[test7$patient %in% c("HC1Tregunstim", "HC2Tregunstim")] <- "HCTregunstim"
+test7$patient[test7$patient %in% c("HC1Tregstim", "HC2Tregstim")] <- "HCTregstim"
+Idents(test7) <- "patient"
+DE.markers <- FindMarkers(test7, ident.1 = "HCTregstim", ident.2 = "HCTregunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/stim_naive_HLADR-_Treg_HC_stimvsunstim.csv"))
+
+#compare activated Tregs, HC stim vs unstim (45RA- and HLA-DR+)
+test8 <- comb_treg@assays$RNA@counts
+select <- test8["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test8["HLA.DR.CD74.AHS0035.pAbO", ] > 30
+x <- colnames(test8)[select]
+test8 <- comb_treg[, x]
+test8$patient <- test8$sample_name # define patient vs others
+test8$patient[test8$patient %in% c("HC1Tregunstim", "HC2Tregunstim")] <- "HCTregunstim"
+test8$patient[test8$patient %in% c("HC1Tregstim", "HC2Tregstim")] <- "HCTregstim"
+Idents(test8) <- "patient"
+DE.markers <- FindMarkers(test8, ident.1 = "HCTregstim", ident.2 = "HCTregunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output2/stim_activated_HLADR+_Treg_HC_stimvsunstim.csv"))
+
+
+
+
+Idents(data_treg$treg_unstim) <- "im.fine"
+ct.markers <- FindAllMarkers(data_treg$treg_unstim, only.pos = T, min.pct = 0.05, logfc.threshold = 1)
+ct.markers.top <- ct.markers %>% group_by(cluster) %>% top_n(n = 500, wt = avg_log2FC)
+ct.heatmap <- DoHeatmap(data_treg$treg_unstim, features = ct.markers.top$gene, size = 2) + NoLegend() + scale_fill_viridis()
+ct.heatmap
+
+table1 <- table(data_treg$treg_unstim$sample_name, data_treg$treg_unstim$im.fine)
+write.csv(table1, "table.csv")
+
+table2 <- table(data$tconv_unstim$sample_name, data$tconv_unstim$im.fine)
+write.csv(table2, "table2.csv")
+
+for_table <- data_treg$treg_unstim[,data_treg$treg_unstim$patient_or_not == "HC"]
+table(for_table$im.fine)
+
+for_table <- data_treg$treg_unstim[,data_treg$treg_unstim$patient_or_not != "HC"]
+table(for_table$im.fine)
+
+for_table <- data_treg$treg_unstim[,data_treg$treg_unstim$patient_or_not == "HC"]
+table(for_table$subset)
+
+for_table <- data_treg$treg_unstim[,data_treg$treg_unstim$patient_or_not != "HC"]
+table(for_table$subset)
+
+saveRDS(s_obj, "s_obj.RDS")
+
+################################ Tconv UMAP plotting
+
+DimPlot(data$tconv_unstim, group.by = "im.fine", cols = c("#79B9FC", "#A5B3CE", "#5A8C89", "#DC9FDF", "#F8EBC9", "#9B98F9", "#FCC5BE", "#FFD110", "#F75641", "#A87858"), label = F, repel = T, label.size = 4, pt.size = 1.5)
+
+DimPlot(data$tconv_unstim, group.by = "sample_name", label = F, repel = T, label.size = 4, pt.size = 1.5)
+
+DimPlot(data$tconv_unstim, group.by = "subset2", cols = c("grey80", "cornflowerblue", "lightpink1", "lightgoldenrod"), label = F, repel = T, label.size = 4, pt.size = 1.5)
+
+data$tconv_unstim$im.fine[data$tconv_unstim$im.fine %in% c("T cells, CD8+, naive, stimulated", "NK cells", "T cells, CD8+, naive")] <- "Undefined"
+
+data$tconv_unstim$patient_or_control <- data$tconv_unstim$sample_name # define patient vs others
+data$tconv_unstim$patient_or_control[data$tconv_unstim$patient_or_control != "P1Tconvunstim"] <- "HC"
+
+data$tconv_stim$patient_or_control <- data$tconv_stim$sample_name # define patient vs others
+data$tconv_stim$patient_or_control[data$tconv_stim$patient_or_control != "P1Tconvstim"] <- "HC"
+
+#violin plots to decide Ab-seq cutoffs for Tconv
+p <- VlnPlot(data$tconv_unstim, features = "CD279.EH12.1.PDCD1.AHS0014.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=10))
+p
+
+p <- VlnPlot(data$tconv_stim, features = "CD279.EH12.1.PDCD1.AHS0014.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=10))
+p
+
+p <- VlnPlot(data$tconv_unstim, features = "CD45RA.HI100.PTPRC.AHS0009.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=30))
+p
+
+p <- VlnPlot(data$tconv_stim, features = "CD45RA.HI100.PTPRC.AHS0009.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=30))
+p
+
+p <- VlnPlot(data$tconv_unstim, features = "HLA.DR.CD74.AHS0035.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=20))
+p
+
+p <- VlnPlot(data$tconv_stim, features = "HLA.DR.CD74.AHS0035.pAbO", group.by = "sample_name")
+p <- lapply(1:1, function(x) p <- p[[x]] + geom_boxplot(width = 0.13, fill = "white") + scale_y_flowjo_biexp(maxValue = 1e4, widthBasis = 0) + geom_hline(yintercept=20))
+p
+
+####
+
+data$tconv_unstim$subset2 <- "subsets_Tconv_unstim"
+
+data$tconv_unstim$subset2[which(data$tconv_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & data$tconv_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] > 20)] <- "CD45RA- HLADR+"
+
+data$tconv_unstim$subset2[which(data$tconv_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & data$tconv_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] < 20)] <- "CD45RA+ HLADR-"
+
+data$tconv_unstim$subset2[which(data$tconv_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] <= 30 & data$tconv_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] <= 20)] <- "CD45RA- HLADR-"
+
+data$tconv_unstim$subset2[which(data$tconv_unstim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] >= 30 & data$tconv_unstim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] >= 20)] <- "CD45RA+ HLADR+"
+
+####
+
+data$tconv_stim$subset2 <- "subsets_Tconv_stim"
+
+data$tconv_stim$subset2[which(data$tconv_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & data$tconv_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] > 20)] <- "CD45RA- HLADR+"
+
+data$tconv_stim$subset2[which(data$tconv_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & data$tconv_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] < 20)] <- "CD45RA+ HLADR-"
+
+data$tconv_stim$subset2[which(data$tconv_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] <= 30 & data$tconv_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] <= 20)] <- "CD45RA- HLADR-"
+
+data$tconv_stim$subset2[which(data$tconv_stim[["RNA"]]["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] >= 30 & data$tconv_stim[["RNA"]]["HLA.DR.CD74.AHS0035.pAbO", ] >= 20)] <- "CD45RA+ HLADR+"
+
+data$tconv_stim$subset_3 <- data$tconv_stim$subset2
+data$tconv_stim$subset_3 <- factor(data$tconv_stim$subset_3, levels = c("CD45RA+ HLADR-", "CD45RA- HLADR+"))
+
+for_table <- data$tconv_unstim[,data$tconv_unstim$patient_or_control == "HC"]
+table(for_table$im.fine)
+
+for_table <- data$tconv_unstim[,data$tconv_unstim$patient_or_control != "HC"]
+table(for_table$im.fine)
+
+for_table <- data$tconv_unstim[,data$tconv_unstim$patient_or_control == "HC"]
+table(for_table$subset2)
+
+for_table <- data$tconv_unstim[,data$tconv_unstim$patient_or_control != "HC"]
+table(for_table$subset2)
+
+### DE in Tconv ###
+
+#compare memory patient Tconv, stim vs unstim (45RA- and HLA-DR+)
+test1 <- comb@assays$RNA@counts
+select <- test1["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test1["HLA.DR.CD74.AHS0035.pAbO", ] > 20
+x <- colnames(test1)[select]
+test1 <- comb[, x]
+test1$patient <- test1$sample_name # define patient vs others
+test1$patient[test1$patient %in% "P1Tconvstim"] <- "P1Tconvstim"
+test1$patient[test1$patient %in% "P1Tconvunstim"] <- "P1Tconvunstim"
+Idents(test1) <- "patient"
+DE.markers <- FindMarkers(test1, ident.1 = "P1Tconvstim", ident.2 = "P1Tconvunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/memory_HLADR+_Tconv_patient_stimvsunstim.csv"))
+
+#compare naive patient Tconv, stim vs unstim (45RA+ and HLA-DR-)
+test2 <- comb@assays$RNA@counts
+select <- test2["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test2["HLA.DR.CD74.AHS0035.pAbO", ] < 20
+x <- colnames(test2)[select]
+test2 <- comb[, x]
+test2$patient <- test2$sample_name # define patient vs others
+test2$patient[test2$patient %in% "P1Tconvstim"] <- "P1Tconvstim"
+test2$patient[test2$patient %in% "P1Tconvunstim"] <- "P1Tconvunstim"
+Idents(test2) <- "patient"
+DE.markers <- FindMarkers(test2, ident.1 = "P1Tconvstim", ident.2 = "P1Tconvunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/naive_HLADR-_Tconv_patient_stimvsunstim.csv"))
+
+#compare stimulated memory Tconv, patient vs HC stim (45RA- and HLA-DR+)
+test3 <- comb@assays$RNA@counts
+select <- test3["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test3["HLA.DR.CD74.AHS0035.pAbO", ] > 20
+x <- colnames(test3)[select]
+test3 <- comb[, x]
+test3$patient <- test3$sample_name # define patient vs others
+test3$patient[test3$patient %in% c("HC1Tconvstim", "HC2Tconvstim")] <- "HCTconvstim"
+test3$patient[test3$patient %in% "P1Tconvstim"] <- "P1Tconvstim"
+Idents(test3) <- "patient"
+DE.markers <- FindMarkers(test3, ident.1 = "P1Tconvstim", ident.2 = "HCTconvstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/stim_memory_HLADR+_Tconv_patientvsHC.csv"))
+
+#compare stimulated naive Tconv, patient vs HC stim (45RA+ and HLA-DR-)
+test4 <- comb@assays$RNA@counts
+select <- test4["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test4["HLA.DR.CD74.AHS0035.pAbO", ] < 20
+x <- colnames(test4)[select]
+test4 <- comb[, x]
+test4$patient <- test4$sample_name # define patient vs others
+test4$patient[test4$patient %in% c("HC1Tconvstim", "HC2Tconvstim")] <- "HCTconvstim"
+test4$patient[test4$patient %in% "P1Tconvstim"] <- "P1Tconvstim"
+Idents(test4) <- "patient"
+DE.markers <- FindMarkers(test4, ident.1 = "P1Tconvstim", ident.2 = "HCTconvstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/stim_naive_HLADR-_Tconv_patientvsHC.csv"))
+
+#compare unstimulated memory Tconv, patient vs HC unstim (45RA- and HLA-DR+)
+test5 <- comb@assays$RNA@counts
+select <- test5["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test5["HLA.DR.CD74.AHS0035.pAbO", ] > 20
+x <- colnames(test5)[select]
+test5 <- comb[, x]
+test5$patient <- test5$sample_name # define patient vs others
+test5$patient[test5$patient %in% c("HC1Tconvunstim", "HC2Tconvunstim")] <- "HCTconvunstim"
+test5$patient[test5$patient %in% "P1Tconvunstim"] <- "P1Tconvunstim"
+Idents(test5) <- "patient"
+DE.markers <- FindMarkers(test5, ident.1 = "P1Tconvunstim", ident.2 = "HCTconvunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/unstim_memory_HLADR+_Tconv_patientvsHC.csv"))
+
+#compare unstimulated naive Tconv, patient vs HC unstim (45RA+ and HLA-DR-)
+test6 <- comb@assays$RNA@counts
+select <- test6["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test6["HLA.DR.CD74.AHS0035.pAbO", ] < 20
+x <- colnames(test6)[select]
+test6 <- comb[, x]
+test6$patient <- test6$sample_name # define patient vs others
+test6$patient[test6$patient %in% c("HC1Tconvunstim", "HC2Tconvunstim")] <- "HCTconvunstim"
+test6$patient[test6$patient %in% "P1Tconvunstim"] <- "P1Tconvunstim"
+Idents(test6) <- "patient"
+DE.markers <- FindMarkers(test6, ident.1 = "P1Tconvunstim", ident.2 = "HCTconvunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/unstim_naive_HLADR-_Tconv_patientvsHC.csv"))
+
+
+#compare naive Tconv, HC stim vs unstim (45RA+ and HLA-DR-)
+test7 <- comb@assays$RNA@counts
+select <- test7["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] > 30 & test7["HLA.DR.CD74.AHS0035.pAbO", ] < 20
+x <- colnames(test7)[select]
+test7 <- comb[, x]
+test7$patient <- test7$sample_name # define patient vs others
+test7$patient[test7$patient %in% c("HC1Tconvunstim", "HC2Tconvunstim")] <- "HCTconvunstim"
+test7$patient[test7$patient %in% c("HC1Tconvstim", "HC2Tconvstim")] <- "HCTconvstim"
+Idents(test7) <- "patient"
+DE.markers <- FindMarkers(test7, ident.1 = "HCTconvstim", ident.2 = "HCTconvunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/stim_naive_HLADR-_Tconv_HC_stimvsunstim.csv"))
+
+#compare memory Tconv, HC stim vs unstim (45RA- and HLA-DR+)
+test8 <- comb@assays$RNA@counts
+select <- test8["CD45RA.HI100.PTPRC.AHS0009.pAbO", ] < 30 & test8["HLA.DR.CD74.AHS0035.pAbO", ] > 20
+x <- colnames(test8)[select]
+test8 <- comb[, x]
+test8$patient <- test8$sample_name # define patient vs others
+test8$patient[test8$patient %in% c("HC1Tconvunstim", "HC2Tconvunstim")] <- "HCTconvunstim"
+test8$patient[test8$patient %in% c("HC1Tconvstim", "HC2Tconvstim")] <- "HCTconvstim"
+Idents(test8) <- "patient"
+DE.markers <- FindMarkers(test8, ident.1 = "HCTconvstim", ident.2 = "HCTconvunstim",
+                            min.pct = 0, logfc.threshold = 0, test.use = "negbinom")
+write.csv(DE.markers, file = paste0("output3/stim_memory_HLADR+_Tconv_HC_stimvsunstim.csv"))
+
+##make heatmap
+
+Idents(data$tconv_unstim) <- "im.fine"
+ct.markers <- FindAllMarkers(data$tconv_unstim, only.pos = T, min.pct = 0.05, logfc.threshold = 1)
+ct.markers.top <- ct.markers %>% group_by(cluster) %>% top_n(n = 500, wt = avg_log2FC)
+ct.heatmap <- DoHeatmap(data$tconv_unstim, features = ct.markers.top$gene, size = 2) + NoLegend() + scale_fill_viridis()
+ct.heatmap
+
+## make featureplot
+
+FeaturePlot(data$tconv_unstim, features = "CD279.EH12.1.PDCD1.AHS0014.pAbO", min.cutoff = "0", max.cutoff = "400")
+```
+
+
+### Monocle 3
+
+```{r}
+# library(devtools)
+# devtools::install_github('cole-trapnell-lab/leidenbase')
+# devtools::install_github('cole-trapnell-lab/monocle3')
+# remotes::install_github('satijalab/seurat-wrappers')
+
+library(monocle3)
+
+# Make cell data set
+data_treg$treg_unstim$sample_name <- colnames(data_treg$treg_unstim)
+cds <- SeuratWrappers::as.cell_data_set(data_treg$treg_unstim)
+pData(cds)$sample_name <- colnames(cds)
+colnames(cds) <- make.unique(colnames(cds))
+
+# Pre-process the data
+cds <- preprocess_cds(cds, num_dim = 50)
+# cds <- align_cds(cds, alignment_group = "batch", residual_model_formula_str = "~ bg.300.loading + bg.400.loading + bg.500.1.loading + bg.500.2.loading + bg.r17.loading + bg.b01.loading + bg.b02.loading")
+
+# Reduce dimensionality and visualize the results
+cds <- reduce_dimension(cds)
+
+# Cluster your cells
+cds <- cluster_cells(cds)
+
+# Learn the trajectory graph
+cds <- learn_graph(cds)
+plot_cells(cds)
+
+# Order the cells in pseudotime
+cds <- order_cells(cds)
+plot_cells(cds,
+           color_cells_by = "pseudotime",
+           label_cell_groups=FALSE,
+           label_leaves=FALSE,
+           label_branch_points=FALSE,
+           graph_label_size=1.5)
+
+```
